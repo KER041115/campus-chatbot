@@ -20,8 +20,7 @@ if not GOOGLE_API_KEY:
     print("⚠️ 警告：未在 .env 中找到 GOOGLE_API_KEY")
 
 genai.configure(api_key=GOOGLE_API_KEY)
-model = genai.GenerativeModel('gemini-2.0-flash-lite')
-
+model = genai.GenerativeModel('gemini-3.5-flash')
 # ============================================
 # 加载向量数据库 (RAG)
 # ============================================
