@@ -1,6 +1,7 @@
 flask
 flask-cors
-requests
 python-dotenv
-gunicorn
 google-generativeai
+chromadb
+sentence-transformers
+pypdf

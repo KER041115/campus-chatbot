@@ -1,4 +1,6 @@
-# app.py - 完整优化版
+# app.py - 完整版（含 RAG 功能）
+import chromadb
+from sentence_transformers import SentenceTransformer
 from flask import Flask, request, jsonify, render_template_string
 from flask_cors import CORS
 import os
@@ -10,14 +12,36 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app)
 
+# ============================================
+# 配置 Gemini AI
+# ============================================
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 if not GOOGLE_API_KEY:
     print("⚠️ 警告：未在 .env 中找到 GOOGLE_API_KEY")
-    # GOOGLE_API_KEY = "你的API密钥"
 
 genai.configure(api_key=GOOGLE_API_KEY)
-model = genai.GenerativeModel('gemini-2.0-flash-lite')  # 改用更快更便宜的模型
+model = genai.GenerativeModel('gemini-2.0-flash-lite')
 
+# ============================================
+# 加载向量数据库 (RAG)
+# ============================================
+print("📚 正在加载向量数据库...")
+chroma_client = chromadb.PersistentClient(path="./chroma_db")
+
+# 检查集合是否存在
+try:
+    collection = chroma_client.get_collection("campus_docs")
+    print(f"✅ 向量数据库已加载，共 {collection.count()} 条记录")
+except:
+    print("⚠️ 向量数据库为空，请先运行 python build_db.py")
+    collection = chroma_client.create_collection(name="campus_docs")
+
+embed_model = SentenceTransformer('all-MiniLM-L6-v2')
+print("✅ 嵌入模型加载完成")
+
+# ============================================
+# 前端界面
+# ============================================
 @app.route('/')
 def index():
     html = '''
@@ -304,7 +328,7 @@ def index():
     return render_template_string(html)
 
 # ============================================
-# API 接口（带系统提示词）
+# API 接口（含 RAG 检索）
 # ============================================
 @app.route('/api/chat', methods=['POST'])
 def chat():
@@ -314,29 +338,58 @@ def chat():
         if not user_message:
             return jsonify({'error': 'Message is required'}), 400
 
-        system_prompt = """You are a helpful campus assistant for Politeknik Sultan Mizan Zainal Abidin (PSMZA).
+        # ============================================
+        # 1. 检索相关内容（RAG）
+        # ============================================
+        collection_count = collection.count()
+        
+        if collection_count > 0:
+            # 将用户问题转换成向量
+            question_embedding = embed_model.encode([user_message]).tolist()
+            # 搜索最相似的3个文档
+            results = collection.query(
+                query_embeddings=question_embedding,
+                n_results=3
+            )
+            
+            # 提取检索到的文档内容
+            context = "\n【Reference Materials】\n"
+            if results and results['documents'] and len(results['documents'][0]) > 0:
+                for i, doc in enumerate(results['documents'][0]):
+                    source = results['metadatas'][0][i].get('source', 'unknown') if results['metadatas'] else 'unknown'
+                    context += f"\n--- Source: {source} ---\n{doc}\n"
+                print(f"📖 Retrieved {len(results['documents'][0])} relevant documents")
+            else:
+                context += "\n(No relevant information found)\n"
+        else:
+            context = "\n(Knowledge base is empty. Please run python build_db.py)\n"
 
-**FORMATTING RULES:**
+        # ============================================
+        # 2. 构建 Prompt 并调用 Gemini
+        # ============================================
+        system_prompt = f"""You are a helpful campus assistant for Politeknik Sultan Mizan Zainal Abidin (PSMZA).
+
+**IMPORTANT RULES:**
+- You MUST answer based **ONLY** on the Reference Materials provided below.
+- If the answer is in the materials, provide a clear, structured answer using Markdown format.
+- If the answer is NOT in the materials, say: "I don't have that information in my knowledge base. Please contact the administrative office."
+- DO NOT use your own knowledge to answer — ONLY use the reference materials.
+
+## Reference Materials:
+{context}
+
+## Formatting Rules:
 - Use Markdown format.
-- Use `##` for main headings, `###` for subheadings.
+- Use `##` for headings, `###` for subheadings.
 - Use numbered lists (1., 2., ...) for steps.
 - Use bullet points (-) for lists.
 - Use **bold** for important terms.
 - Use blank lines between sections.
 - Respond in English or Malay based on user's language.
 
-Example:
-## Step 1: Log in
-1. Go to the portal.
-2. Enter your ID.
+Now answer the user's question based **ONLY** on the Reference Materials above:"""
 
-## Step 2: Check holds
-- Check for holds.
-- Clear them.
-
-Now answer:"""
-
-        full_prompt = f"{system_prompt}\n\n{user_message}"
+        full_prompt = f"{system_prompt}\n\nUser question: {user_message}"
         response = model.generate_content(full_prompt)
         reply = response.text
 
@@ -351,8 +404,10 @@ Now answer:"""
 # ============================================
 if __name__ == '__main__':
     print("=" * 50)
-    print("🎓 PSMZA AI Assistant (Enhanced)")
+    print("🎓 PSMZA AI Assistant (RAG Enhanced)")
     print("=" * 50)
     print("📍 Local URL: http://127.0.0.1:5000")
+    print("=" * 50)
+    print("📚 向量数据库状态：", collection.count(), "条记录")
     print("=" * 50)
     app.run(host='0.0.0.0', port=5000, debug=True)
