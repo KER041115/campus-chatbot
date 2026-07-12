@@ -1,31 +1,23 @@
-# app.py
+# app.py - 完整优化版
 from flask import Flask, request, jsonify, render_template_string
 from flask_cors import CORS
 import os
 from dotenv import load_dotenv
 import google.generativeai as genai
 
-# 加载环境变量
 load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
 
-# ============================================
-# 配置 Gemini AI
-# ============================================
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 if not GOOGLE_API_KEY:
-    print("⚠️ 警告：未在 .env 中找到 GOOGLE_API_KEY，请检查！")
-    # 如果你没有 .env 文件，可以直接在这里赋值，但强烈建议使用 .env
+    print("⚠️ 警告：未在 .env 中找到 GOOGLE_API_KEY")
     # GOOGLE_API_KEY = "你的API密钥"
 
 genai.configure(api_key=GOOGLE_API_KEY)
-# 使用效果更好且配额充足的模型
-model = genai.GenerativeModel('gemini-3.5-flash')
-# ============================================
-# 前端界面
-# ============================================
+model = genai.GenerativeModel('gemini-2.0-flash-lite')  # 改用更快更便宜的模型
+
 @app.route('/')
 def index():
     html = '''
@@ -34,6 +26,7 @@ def index():
 <head>
     <meta charset="UTF-8">
     <title>PSMZA AI Assistant</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -64,16 +57,8 @@ def index():
             text-align: center;
             flex-shrink: 0;
         }
-        .header h1 {
-            font-size: 24px;
-            font-weight: 600;
-            letter-spacing: 0.5px;
-        }
-        .header p {
-            font-size: 14px;
-            opacity: 0.9;
-            margin-top: 4px;
-        }
+        .header h1 { font-size: 24px; font-weight: 600; letter-spacing: 0.5px; }
+        .header p { font-size: 14px; opacity: 0.9; margin-top: 4px; }
         .quick-actions {
             display: flex;
             gap: 10px;
@@ -119,11 +104,17 @@ def index():
             max-width: 80%;
             padding: 10px 16px;
             border-radius: 16px;
-            line-height: 1.5;
+            line-height: 1.6;
             word-wrap: break-word;
             animation: fadeIn 0.3s ease;
             font-size: 15px;
         }
+        .message.bot h2 { font-size: 18px; margin: 12px 0 6px 0; }
+        .message.bot h3 { font-size: 16px; margin: 10px 0 4px 0; }
+        .message.bot ul, .message.bot ol { padding-left: 20px; margin: 6px 0; }
+        .message.bot li { margin: 4px 0; }
+        .message.bot strong { color: #667eea; }
+        
         @keyframes fadeIn {
             from { opacity: 0; transform: translateY(8px); }
             to { opacity: 1; transform: translateY(0); }
@@ -183,9 +174,7 @@ def index():
             outline: none;
             transition: border 0.2s;
         }
-        .input-area input:focus {
-            border-color: #667eea;
-        }
+        .input-area input:focus { border-color: #667eea; }
         .input-area button {
             padding: 10px 24px;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -198,14 +187,8 @@ def index():
             transition: transform 0.15s, opacity 0.15s;
             white-space: nowrap;
         }
-        .input-area button:hover {
-            transform: scale(1.02);
-        }
-        .input-area button:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-            transform: none;
-        }
+        .input-area button:hover { transform: scale(1.02); }
+        .input-area button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
         .footer {
             text-align: center;
             padding: 8px;
@@ -250,7 +233,11 @@ def index():
         function addMessage(text, isUser) {
             const div = document.createElement('div');
             div.className = 'message ' + (isUser ? 'user' : 'bot');
-            div.textContent = text;
+            if (isUser) {
+                div.textContent = text;
+            } else {
+                div.innerHTML = marked.parse(text);
+            }
             chatDiv.appendChild(div);
             chatDiv.scrollTop = chatDiv.scrollHeight;
         }
@@ -317,7 +304,7 @@ def index():
     return render_template_string(html)
 
 # ============================================
-# API 接口
+# API 接口（带系统提示词）
 # ============================================
 @app.route('/api/chat', methods=['POST'])
 def chat():
@@ -327,8 +314,30 @@ def chat():
         if not user_message:
             return jsonify({'error': 'Message is required'}), 400
 
-        # 调用 Google Gemini
-        response = model.generate_content(user_message)
+        system_prompt = """You are a helpful campus assistant for Politeknik Sultan Mizan Zainal Abidin (PSMZA).
+
+**FORMATTING RULES:**
+- Use Markdown format.
+- Use `##` for main headings, `###` for subheadings.
+- Use numbered lists (1., 2., ...) for steps.
+- Use bullet points (-) for lists.
+- Use **bold** for important terms.
+- Use blank lines between sections.
+- Respond in English or Malay based on user's language.
+
+Example:
+## Step 1: Log in
+1. Go to the portal.
+2. Enter your ID.
+
+## Step 2: Check holds
+- Check for holds.
+- Clear them.
+
+Now answer:"""
+
+        full_prompt = f"{system_prompt}\n\n{user_message}"
+        response = model.generate_content(full_prompt)
         reply = response.text
 
         return jsonify({'reply': reply})
