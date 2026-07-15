@@ -1,12 +1,11 @@
-# app.py - 完整版（含 RAG 功能）
-import chromadb
-from sentence_transformers import SentenceTransformer
-from flask import Flask, request, jsonify, render_template_string
-from flask_cors import CORS
+# app.py - 完整优化版（懒加载 + 端口绑定）
 import os
 from dotenv import load_dotenv
+from flask import Flask, request, jsonify, render_template_string
+from flask_cors import CORS
 import google.generativeai as genai
 
+# 加载环境变量
 load_dotenv()
 
 app = Flask(__name__)
@@ -21,22 +20,36 @@ if not GOOGLE_API_KEY:
 
 genai.configure(api_key=GOOGLE_API_KEY)
 model = genai.GenerativeModel('gemini-3.5-flash')
-# ============================================
-# 加载向量数据库 (RAG)
-# ============================================
-print("📚 正在加载向量数据库...")
-chroma_client = chromadb.PersistentClient(path="./chroma_db")
 
-# 检查集合是否存在
-try:
-    collection = chroma_client.get_collection("campus_docs")
-    print(f"✅ 向量数据库已加载，共 {collection.count()} 条记录")
-except:
-    print("⚠️ 向量数据库为空，请先运行 python build_db.py")
-    collection = chroma_client.create_collection(name="campus_docs")
+# ============================================
+# 懒加载 RAG 组件（启动时不加载，首次使用时加载）
+# ============================================
+chroma_client = None
+collection = None
+embed_model = None
 
-embed_model = SentenceTransformer('all-MiniLM-L6-v2')
-print("✅ 嵌入模型加载完成")
+def load_rag_models():
+    """延迟加载 RAG 组件，仅在第一次聊天请求时加载"""
+    global chroma_client, collection, embed_model
+    
+    if chroma_client is None:
+        print("📚 正在加载向量数据库...")
+        import chromadb
+        from sentence_transformers import SentenceTransformer
+        
+        chroma_client = chromadb.PersistentClient(path="./chroma_db")
+        try:
+            collection = chroma_client.get_collection("campus_docs")
+            print(f"✅ 向量数据库已加载，共 {collection.count()} 条记录")
+        except:
+            print("⚠️ 向量数据库为空，请先运行 python build_db.py")
+            collection = chroma_client.create_collection(name="campus_docs")
+        
+        print("✅ 加载嵌入模型...")
+        embed_model = SentenceTransformer('all-MiniLM-L6-v2')
+        print("✅ 嵌入模型加载完成")
+    
+    return collection, embed_model
 
 # ============================================
 # 前端界面
@@ -327,7 +340,7 @@ def index():
     return render_template_string(html)
 
 # ============================================
-# API 接口（含 RAG 检索）
+# API 接口（含 RAG 检索，懒加载）
 # ============================================
 @app.route('/api/chat', methods=['POST'])
 def chat():
@@ -338,7 +351,12 @@ def chat():
             return jsonify({'error': 'Message is required'}), 400
 
         # ============================================
-        # 1. 检索相关内容（RAG）
+        # 1. 懒加载 RAG 组件（第一次请求时加载）
+        # ============================================
+        collection, embed_model = load_rag_models()
+        
+        # ============================================
+        # 2. 检索相关内容（RAG）
         # ============================================
         collection_count = collection.count()
         
@@ -364,7 +382,7 @@ def chat():
             context = "\n(Knowledge base is empty. Please run python build_db.py)\n"
 
         # ============================================
-        # 2. 构建 Prompt 并调用 Gemini
+        # 3. 构建 Prompt 并调用 Gemini
         # ============================================
         system_prompt = f"""You are a helpful campus assistant for Politeknik Sultan Mizan Zainal Abidin (PSMZA).
 
@@ -402,11 +420,13 @@ Now answer the user's question based **ONLY** on the Reference Materials above:"
 # 启动服务
 # ============================================
 if __name__ == '__main__':
+    # Render 会提供 PORT 环境变量，默认为 10000
+    port = int(os.environ.get('PORT', 10000))
     print("=" * 50)
     print("🎓 PSMZA AI Assistant (RAG Enhanced)")
     print("=" * 50)
-    print("📍 Local URL: http://127.0.0.1:5000")
+    print(f"📍 Local URL: http://127.0.0.1:{port}")
     print("=" * 50)
-    print("📚 向量数据库状态：", collection.count(), "条记录")
+    print("📚 向量数据库将在首次请求时加载（懒加载）")
     print("=" * 50)
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=port, debug=False)
